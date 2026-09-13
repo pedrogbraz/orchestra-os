@@ -13,7 +13,7 @@ Early development. The installer and configs here are a working v1 skeleton, not
 Requires Arch Linux (or an Arch-based distro) on x86_64.
 
 ```bash
-git clone https://github.com/<your-username>/orchestra-os.git ~/orchestra-os
+git clone https://github.com/pedrogbraz/orchestra-os.git ~/orchestra-os
 cd ~/orchestra-os
 ./install/install.sh
 ```
