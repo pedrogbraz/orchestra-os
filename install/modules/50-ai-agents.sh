@@ -9,8 +9,9 @@ info "Installing Codex CLI"
 sudo npm install -g @openai/codex || warn "Could not install @openai/codex — install it manually if you need it."
 
 info "Installing Aider"
-# Prefer wheels: Arch's newest Python has no wheel for aider's older pinned numpy, and the source build fails.
-pipx install --force aider-chat --pip-args="--prefer-binary" \
+# Aider supports Python <=3.12; on Arch's newer Python pip falls back to an ancient release that fails to build.
+sudo pacman -S --needed --noconfirm uv
+uv tool install --force --python 3.12 aider-chat@latest \
   || warn "Could not install aider-chat — continuing without it."
 
 info "Installing Ollama"
