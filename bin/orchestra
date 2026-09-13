@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ORCHESTRA_IMAGE="${ORCHESTRA_IMAGE:-orchestra-os/agent-sandbox:latest}"
+ORCHESTRA_WORKTREE_ROOT="${ORCHESTRA_WORKTREE_ROOT:-$HOME/.orchestra/worktrees}"
+
+usage() {
+  cat <<'EOF'
+orchestra - run isolated AI coding agents on git worktrees + containers
+
+Usage:
+  orchestra new <agent> <repo-path> [branch]   Create a worktree + sandboxed container for an agent
+  orchestra list                               List running agent containers
+  orchestra attach <agent>                     Attach to a running agent's shell
+  orchestra stop <agent>                       Stop an agent's container (keeps the worktree)
+  orchestra rm <agent>                         Stop the container and remove the worktree
+EOF
+}
+
+cmd_new() {
+  local agent="$1" repo_path="$2" branch="${3:-agent/$agent}"
+  local repo_name worktree_path
+
+  repo_name="$(basename "$(cd "$repo_path" && pwd)")"
+  worktree_path="$ORCHESTRA_WORKTREE_ROOT/$repo_name-$agent"
+
+  mkdir -p "$ORCHESTRA_WORKTREE_ROOT"
+  git -C "$repo_path" worktree add -B "$branch" "$worktree_path"
+
+  docker run -d \
+    --name "orchestra-$agent" \
+    --label "orchestra.agent=$agent" \
+    --label "orchestra.repo=$repo_name" \
+    -v "$worktree_path:/workspace" \
+    -w /workspace \
+    "$ORCHESTRA_IMAGE" \
+    sleep infinity
+
+  echo "Agent '$agent' ready."
+  echo "Worktree: $worktree_path"
+  echo "Attach with: orchestra attach $agent"
+}
+
+cmd_list() {
+  docker ps --filter "label=orchestra.agent" \
+    --format 'table {{.Names}}\t{{.Label "orchestra.agent"}}\t{{.Label "orchestra.repo"}}\t{{.Status}}'
+}
+
+cmd_attach() {
+  local agent="$1"
+  docker exec -it "orchestra-$agent" fish 2>/dev/null || docker exec -it "orchestra-$agent" bash
+}
+
+cmd_stop() {
+  local agent="$1"
+  docker stop "orchestra-$agent"
+}
+
+cmd_rm() {
+  local agent="$1" worktree_path
+  worktree_path=$(docker inspect \
+    -f '{{ range .Mounts }}{{ if eq .Destination "/workspace" }}{{ .Source }}{{ end }}{{ end }}' \
+    "orchestra-$agent" 2>/dev/null || true)
+
+  docker rm -f "orchestra-$agent" >/dev/null 2>&1 || true
+
+  if [[ -n "${worktree_path:-}" && -d "$worktree_path" ]]; then
+    git -C "$worktree_path" worktree remove --force "$worktree_path" 2>/dev/null || rm -rf "$worktree_path"
+  fi
+}
+
+case "${1:-}" in
+  new)
+    shift
+    cmd_new "$@"
+    ;;
+  list)
+    cmd_list
+    ;;
+  attach)
+    shift
+    cmd_attach "$@"
+    ;;
+  stop)
+    shift
+    cmd_stop "$@"
+    ;;
+  rm)
+    shift
+    cmd_rm "$@"
+    ;;
+  *)
+    usage
+    ;;
+esac
