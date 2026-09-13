@@ -48,11 +48,13 @@ cmd_new() {
   mkdir -p "$ORCHESTRA_WORKTREE_ROOT" "$ORCHESTRA_AGENT_HOME"
 
   # Never reset an existing branch: it may hold commits from a previous agent.
+  local created_branch=0
   if git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
     echo "Reusing existing branch '$branch'."
     git -C "$repo_path" worktree add "$worktree_path" "$branch"
   else
     git -C "$repo_path" worktree add -b "$branch" "$worktree_path"
+    created_branch=1
   fi
 
   local -a env_args=(-e HOME=/home/agent)
@@ -78,7 +80,7 @@ cmd_new() {
   # Run as the host user so agent-created files stay editable/removable on the host.
   # The worktree's .git file points at an absolute path in the main repo, so mount it at the same path.
   # A shared persistent HOME keeps agent logins (claude, codex, aider) across agents.
-  docker run -d \
+  if ! docker run -d \
     --name "orchestra-$agent" \
     --label "orchestra.agent=$agent" \
     --label "orchestra.repo=$repo_name" \
@@ -91,7 +93,18 @@ cmd_new() {
     -v "$git_common_dir:$git_common_dir" \
     -w /workspace \
     "$ORCHESTRA_IMAGE" \
-    sleep infinity
+    sleep infinity >/dev/null; then
+    # Don't leave a worktree behind when the container fails to start, or the next `new` refuses to run.
+    git -C "$repo_path" worktree remove --force "$worktree_path"
+    if [[ $created_branch == 1 ]]; then
+      git -C "$repo_path" branch -D "$branch" >/dev/null
+    fi
+    exit 1
+  fi
+
+  # The host uid has no passwd entry in the image: shells show "I have no name!" and getpwuid-based tools fail.
+  docker exec -u 0 "orchestra-$agent" sh -c \
+    "grep -q ':x:$(id -u):' /etc/passwd || echo 'agent:x:$(id -u):$(id -g)::/home/agent:/bin/sh' >> /etc/passwd"
 
   echo "Agent '$agent' ready."
   echo "Worktree: $worktree_path"
@@ -104,8 +117,12 @@ cmd_list() {
 }
 
 cmd_attach() {
-  local agent="$1"
-  docker exec -it "orchestra-$agent" fish 2>/dev/null || docker exec -it "orchestra-$agent" bash
+  local agent="$1" shell=bash
+  # Pick the shell up front: falling back on fish's exit status reopened bash whenever a fish session ended non-zero.
+  if docker exec "orchestra-$agent" sh -c 'command -v fish' >/dev/null 2>&1; then
+    shell=fish
+  fi
+  docker exec -it "orchestra-$agent" "$shell"
 }
 
 cmd_stop() {
