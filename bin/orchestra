@@ -18,7 +18,12 @@ EOF
 }
 
 cmd_new() {
-  local agent="$1" repo_path="$2" branch="${3:-agent/$agent}"
+  if [[ $# -lt 2 ]]; then
+    usage
+    exit 1
+  fi
+  local agent="$1" repo_path="$2"
+  local branch="${3:-agent/$agent}"
   local repo_name worktree_path
 
   repo_name="$(basename "$(cd "$repo_path" && pwd)")"
