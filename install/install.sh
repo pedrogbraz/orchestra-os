@@ -39,4 +39,6 @@ for module in "${MODULES[@]}"; do
   bash "$REPO_DIR/install/modules/$module.sh"
 done
 
-ok "Orchestra OS setup complete. Log out and select Hyprland at your display manager, or run 'Hyprland' from a TTY."
+if [[ -z "$ONLY" ]]; then
+  ok "Orchestra OS setup complete. Log out and select Hyprland at your display manager, or run 'Hyprland' from a TTY."
+fi
