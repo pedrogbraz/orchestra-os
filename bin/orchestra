@@ -24,19 +24,30 @@ cmd_new() {
   fi
   local agent="$1" repo_path="$2"
   local branch="${3:-agent/$agent}"
-  local repo_name worktree_path
+  local repo_name worktree_path git_common_dir
 
-  repo_name="$(basename "$(cd "$repo_path" && pwd)")"
+  if ! repo_path="$(git -C "$repo_path" rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "orchestra: '$2' is not a git repository" >&2
+    exit 1
+  fi
+  repo_name="$(basename "$repo_path")"
   worktree_path="$ORCHESTRA_WORKTREE_ROOT/$repo_name-$agent"
+  git_common_dir="$(git -C "$repo_path" rev-parse --path-format=absolute --git-common-dir)"
 
   mkdir -p "$ORCHESTRA_WORKTREE_ROOT"
   git -C "$repo_path" worktree add -B "$branch" "$worktree_path"
 
+  # Run as the host user so agent-created files stay editable/removable on the host.
+  # The worktree's .git file points at an absolute path in the main repo, so mount it at the same path.
   docker run -d \
     --name "orchestra-$agent" \
     --label "orchestra.agent=$agent" \
     --label "orchestra.repo=$repo_name" \
+    --label "orchestra.repo_path=$repo_path" \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/home/agent \
     -v "$worktree_path:/workspace" \
+    -v "$git_common_dir:$git_common_dir" \
     -w /workspace \
     "$ORCHESTRA_IMAGE" \
     sleep infinity
@@ -62,16 +73,19 @@ cmd_stop() {
 }
 
 cmd_rm() {
-  local agent="$1" worktree_path
+  local agent="$1" worktree_path repo_path
   worktree_path=$(docker inspect \
     -f '{{ range .Mounts }}{{ if eq .Destination "/workspace" }}{{ .Source }}{{ end }}{{ end }}' \
+    "orchestra-$agent" 2>/dev/null || true)
+  repo_path=$(docker inspect -f '{{ index .Config.Labels "orchestra.repo_path" }}' \
     "orchestra-$agent" 2>/dev/null || true)
 
   docker rm -f "orchestra-$agent" >/dev/null 2>&1 || true
 
-  if [[ -n "${worktree_path:-}" && -d "$worktree_path" ]]; then
-    git -C "$worktree_path" worktree remove --force "$worktree_path" 2>/dev/null || rm -rf "$worktree_path"
+  if [[ -n "$repo_path" && -n "$worktree_path" ]]; then
+    git -C "$repo_path" worktree remove --force "$worktree_path"
   fi
+  echo "Agent '$agent' removed."
 }
 
 case "${1:-}" in
