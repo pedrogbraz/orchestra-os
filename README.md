@@ -46,7 +46,21 @@ orchestra new refactor-agent ~/code/my-app        # worktree + sandboxed contain
 orchestra list                                    # see active agents
 orchestra attach refactor-agent                   # shell into the agent's container
 orchestra stop refactor-agent                     # stop the container, keep the worktree
-orchestra rm refactor-agent                       # stop and remove worktree + container
+orchestra rm refactor-agent                       # stop and remove worktree + container (branch is kept)
+```
+
+Each agent works on its own branch (`agent/<name>` by default). `orchestra rm` never deletes that branch, and creating an agent with the same name later reuses it, so an agent's commits are never lost.
+
+### Credentials
+
+Agents run as your user and commit with your `git config user.name` / `user.email`. All agents share one persistent home at `~/.orchestra/agent-home`, so logging in once inside any agent (`claude`, `codex`, `aider`) carries over to the next.
+
+API keys are passed into the container from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `OPENROUTER_API_KEY` if they're set in your shell, plus anything in `~/.config/orchestra/env` (one `KEY=value` per line):
+
+```bash
+mkdir -p ~/.config/orchestra
+echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/orchestra/env
+chmod 600 ~/.config/orchestra/env
 ```
 
 ## Repository layout

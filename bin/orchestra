@@ -3,6 +3,8 @@ set -euo pipefail
 
 ORCHESTRA_IMAGE="${ORCHESTRA_IMAGE:-orchestra-os/agent-sandbox:latest}"
 ORCHESTRA_WORKTREE_ROOT="${ORCHESTRA_WORKTREE_ROOT:-$HOME/.orchestra/worktrees}"
+ORCHESTRA_AGENT_HOME="${ORCHESTRA_AGENT_HOME:-$HOME/.orchestra/agent-home}"
+ORCHESTRA_ENV_FILE="${ORCHESTRA_ENV_FILE:-$HOME/.config/orchestra/env}"
 
 usage() {
   cat <<'EOF'
@@ -34,18 +36,57 @@ cmd_new() {
   worktree_path="$ORCHESTRA_WORKTREE_ROOT/$repo_name-$agent"
   git_common_dir="$(git -C "$repo_path" rev-parse --path-format=absolute --git-common-dir)"
 
-  mkdir -p "$ORCHESTRA_WORKTREE_ROOT"
-  git -C "$repo_path" worktree add -B "$branch" "$worktree_path"
+  if docker container inspect "orchestra-$agent" >/dev/null 2>&1; then
+    echo "orchestra: agent '$agent' already exists (remove it first: orchestra rm $agent)" >&2
+    exit 1
+  fi
+  if [[ -e "$worktree_path" ]]; then
+    echo "orchestra: worktree path already exists: $worktree_path" >&2
+    exit 1
+  fi
+
+  mkdir -p "$ORCHESTRA_WORKTREE_ROOT" "$ORCHESTRA_AGENT_HOME"
+
+  # Never reset an existing branch: it may hold commits from a previous agent.
+  if git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
+    echo "Reusing existing branch '$branch'."
+    git -C "$repo_path" worktree add "$worktree_path" "$branch"
+  else
+    git -C "$repo_path" worktree add -b "$branch" "$worktree_path"
+  fi
+
+  local -a env_args=(-e HOME=/home/agent)
+  local git_name git_email var
+  git_name="$(git -C "$repo_path" config user.name || true)"
+  git_email="$(git -C "$repo_path" config user.email || true)"
+  if [[ -n "$git_name" ]]; then
+    env_args+=(-e "GIT_AUTHOR_NAME=$git_name" -e "GIT_COMMITTER_NAME=$git_name")
+  fi
+  if [[ -n "$git_email" ]]; then
+    env_args+=(-e "GIT_AUTHOR_EMAIL=$git_email" -e "GIT_COMMITTER_EMAIL=$git_email")
+  fi
+  # Pass keys by name only, so their values never show up in the process list.
+  for var in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
+    if [[ -n "${!var:-}" ]]; then
+      env_args+=(-e "$var")
+    fi
+  done
+  if [[ -f "$ORCHESTRA_ENV_FILE" ]]; then
+    env_args+=(--env-file "$ORCHESTRA_ENV_FILE")
+  fi
 
   # Run as the host user so agent-created files stay editable/removable on the host.
   # The worktree's .git file points at an absolute path in the main repo, so mount it at the same path.
+  # A shared persistent HOME keeps agent logins (claude, codex, aider) across agents.
   docker run -d \
     --name "orchestra-$agent" \
     --label "orchestra.agent=$agent" \
     --label "orchestra.repo=$repo_name" \
     --label "orchestra.repo_path=$repo_path" \
+    --label "orchestra.branch=$branch" \
     --user "$(id -u):$(id -g)" \
-    -e HOME=/home/agent \
+    "${env_args[@]}" \
+    -v "$ORCHESTRA_AGENT_HOME:/home/agent" \
     -v "$worktree_path:/workspace" \
     -v "$git_common_dir:$git_common_dir" \
     -w /workspace \
@@ -73,11 +114,17 @@ cmd_stop() {
 }
 
 cmd_rm() {
-  local agent="$1" worktree_path repo_path
+  local agent="$1" worktree_path repo_path branch
+  if ! docker container inspect "orchestra-$agent" >/dev/null 2>&1; then
+    echo "orchestra: no agent named '$agent'" >&2
+    exit 1
+  fi
   worktree_path=$(docker inspect \
     -f '{{ range .Mounts }}{{ if eq .Destination "/workspace" }}{{ .Source }}{{ end }}{{ end }}' \
     "orchestra-$agent" 2>/dev/null || true)
   repo_path=$(docker inspect -f '{{ index .Config.Labels "orchestra.repo_path" }}' \
+    "orchestra-$agent" 2>/dev/null || true)
+  branch=$(docker inspect -f '{{ index .Config.Labels "orchestra.branch" }}' \
     "orchestra-$agent" 2>/dev/null || true)
 
   docker rm -f "orchestra-$agent" >/dev/null 2>&1 || true
@@ -86,6 +133,9 @@ cmd_rm() {
     git -C "$repo_path" worktree remove --force "$worktree_path"
   fi
   echo "Agent '$agent' removed."
+  if [[ -n "$branch" ]]; then
+    echo "Branch '$branch' was kept. Delete it with: git -C $repo_path branch -D $branch"
+  fi
 }
 
 case "${1:-}" in
