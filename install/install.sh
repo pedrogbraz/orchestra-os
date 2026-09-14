@@ -31,6 +31,15 @@ for arg in "$@"; do
   esac
 done
 
+# The full install outlasts sudo's 5-minute timeout; a missed re-prompt would abort it under set -e.
+info "Orchestra OS needs sudo for package installs — enter your password once:"
+sudo -v
+while true; do
+  sudo -n true
+  sleep 50
+  kill -0 "$$" || exit
+done 2>/dev/null &
+
 for module in "${MODULES[@]}"; do
   if [[ -n "$ONLY" && "$module" != "$ONLY" ]]; then
     continue
