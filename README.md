@@ -44,10 +44,14 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning behind these 
 ```bash
 orchestra new refactor-agent ~/code/my-app        # worktree + sandboxed container
 orchestra list                                    # see active agents
-orchestra attach refactor-agent                   # shell into the agent's container
+orchestra attach refactor-agent                   # shell into the agent's container (Ctrl-b d to detach)
+orchestra logs refactor-agent                     # print what's on the agent's screen, with scrollback
+orchestra logs -f refactor-agent                  # watch the agent live, read-only (Ctrl-b d to stop)
 orchestra stop refactor-agent                     # stop the container, keep the worktree
 orchestra rm refactor-agent                       # stop and remove worktree + container (branch is kept)
 ```
+
+Agent shells run inside tmux, so detaching (`Ctrl-b d`) or losing your SSH connection leaves the agent working; `orchestra attach` picks the same session back up.
 
 Each agent works on its own branch (`agent/<name>` by default). `orchestra rm` never deletes that branch, and creating an agent with the same name later reuses it, so an agent's commits are never lost.
 

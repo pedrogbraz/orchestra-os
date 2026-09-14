@@ -27,6 +27,12 @@ jobs:
           fi
           bash bin/orchestra new a "$RUNNER_TEMP" 2>&1 | grep -q "is not a git repository"
           bash bin/orchestra new a . --bogus 2>&1 | grep -q "unknown option"
+          for cmd in attach logs stop rm; do
+            if bash bin/orchestra "$cmd" >/dev/null 2>&1; then
+              echo "expected 'orchestra $cmd' without an agent to fail"; exit 1
+            fi
+          done
+          bash bin/orchestra logs a -n abc 2>&1 | grep -q "must be a number"
           mkdir -p "$RUNNER_TEMP/bin"
           printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/pacman"
           chmod +x "$RUNNER_TEMP/bin/pacman"

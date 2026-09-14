@@ -17,7 +17,8 @@
 ## Phase 1 — Hardening
 
 - [ ] Idempotent re-runs of every module (safe to run `install.sh` twice)
-- [ ] `orchestra`: live-tail agent output, resource limits (`--cpus`, `--memory`) per agent
+- [x] `orchestra`: per-agent resource limits (`--cpus`, `--memory`)
+- [x] `orchestra logs`: read or live-watch an agent's screen; agent sessions survive detaching
 - [ ] Config profiles in the installer (choose terminal/editor at install time instead of one fixed stack)
 - [ ] Expanded MCP server catalog (browser automation, database, search)
 - [ ] Automated CI: shellcheck on every module, `bash -n` syntax gate, Dockerfile build check

@@ -15,7 +15,8 @@ Usage:
                                                Create a worktree + sandboxed container for an agent
                                                (default: half the CPU cores, 4g; 0 means no limit)
   orchestra list                               List running agent containers
-  orchestra attach <agent>                     Attach to a running agent's shell
+  orchestra attach <agent>                     Open the agent's shell (Ctrl-b d detaches; the agent keeps running)
+  orchestra logs <agent> [-n LINES] [-f]       Print the agent's recent screen output; -f watches it live, read-only
   orchestra stop <agent>                       Stop an agent's container (keeps the worktree)
   orchestra rm <agent>                         Stop the container and remove the worktree
 EOF
@@ -146,21 +147,96 @@ cmd_list() {
     --format 'table {{.Names}}\t{{.Label "orchestra.agent"}}\t{{.Label "orchestra.repo"}}\t{{.Label "orchestra.cpus"}}\t{{.Label "orchestra.memory"}}\t{{.Status}}'
 }
 
+require_agent() {
+  if [[ $# -lt 1 || -z "$1" ]]; then
+    usage
+    exit 1
+  fi
+}
+
+require_running() {
+  local state
+  if ! state="$(docker inspect -f '{{.State.Running}}' "orchestra-$1" 2>/dev/null)"; then
+    echo "orchestra: no agent named '$1'" >&2
+    exit 1
+  fi
+  if [[ "$state" != true ]]; then
+    echo "orchestra: agent '$1' is stopped" >&2
+    exit 1
+  fi
+}
+
+# Never forward the host's TERM: tmux refuses to start on terminals the image has no terminfo for
+# (e.g. Ghostty's xterm-ghostty). xterm-256color exists everywhere and host terminals render it fine.
+has_tmux() {
+  docker exec "orchestra-$1" sh -c 'command -v tmux' >/dev/null 2>&1
+}
+
 cmd_attach() {
+  require_agent "$@"
   local agent="$1" shell=bash
+  require_running "$agent"
   # Pick the shell up front: falling back on fish's exit status reopened bash whenever a fish session ended non-zero.
   if docker exec "orchestra-$agent" sh -c 'command -v fish' >/dev/null 2>&1; then
     shell=fish
   fi
-  docker exec -it "orchestra-$agent" "$shell"
+  if has_tmux "$agent"; then
+    # tmux keeps the agent running after a detach or dropped connection, and gives `orchestra logs` a screen to read.
+    docker exec -it -e TERM=xterm-256color "orchestra-$agent" \
+      tmux new-session -A -s agent "$shell"
+  else
+    echo "orchestra: this agent's image has no tmux, so the session ends when you disconnect." >&2
+    echo "orchestra: rebuild it with ./install/install.sh --only=60-docker, then recreate the agent." >&2
+    docker exec -it "orchestra-$agent" "$shell"
+  fi
+}
+
+cmd_logs() {
+  local agent="" follow=0 lines=200
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--follow) follow=1; shift ;;
+      -n|--lines) lines="${2:?--lines needs a value}"; shift 2 ;;
+      --lines=*) lines="${1#--lines=}"; shift ;;
+      -*) echo "orchestra: unknown option: $1" >&2; exit 1 ;;
+      *) agent="$1"; shift ;;
+    esac
+  done
+  require_agent "$agent"
+  if ! [[ "$lines" =~ ^[0-9]+$ ]]; then
+    echo "orchestra: --lines must be a number" >&2
+    exit 1
+  fi
+  require_running "$agent"
+
+  local container="orchestra-$agent"
+  if ! has_tmux "$agent"; then
+    echo "orchestra: this agent's image has no tmux; rebuild it with ./install/install.sh --only=60-docker and recreate the agent" >&2
+    exit 1
+  fi
+  if ! docker exec "$container" tmux has-session -t agent 2>/dev/null; then
+    echo "orchestra: agent '$agent' has no session yet (start one with: orchestra attach $agent)" >&2
+    exit 1
+  fi
+
+  if [[ $follow == 1 ]]; then
+    echo "Watching '$agent' read-only. Press Ctrl-b d to stop." >&2
+    # read-only: keystrokes never reach the agent. ignore-size: watching doesn't shrink the agent's screen.
+    docker exec -it -e TERM=xterm-256color "$container" \
+      tmux attach-session -t agent -f read-only,ignore-size
+  else
+    docker exec "$container" tmux capture-pane -p -J -t agent -S "-$lines"
+  fi
 }
 
 cmd_stop() {
+  require_agent "$@"
   local agent="$1"
   docker stop "orchestra-$agent"
 }
 
 cmd_rm() {
+  require_agent "$@"
   local agent="$1" worktree_path repo_path branch
   if ! docker container inspect "orchestra-$agent" >/dev/null 2>&1; then
     echo "orchestra: no agent named '$agent'" >&2
@@ -196,6 +272,10 @@ case "${1:-}" in
   attach)
     shift
     cmd_attach "$@"
+    ;;
+  logs)
+    shift
+    cmd_logs "$@"
     ;;
   stop)
     shift
