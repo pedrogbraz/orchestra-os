@@ -77,6 +77,10 @@ cmd_new() {
     env_args+=(--env-file "$ORCHESTRA_ENV_FILE")
   fi
 
+  # Claude Code names Remote Control sessions after the hostname; the default (container id) is unreadable.
+  local container_hostname
+  container_hostname="$(printf '%s' "$agent" | tr -c 'A-Za-z0-9-' '-' | cut -c1-63)"
+
   # Run as the host user so agent-created files stay editable/removable on the host.
   # The worktree's .git file points at an absolute path in the main repo, so mount it at the same path.
   # A shared persistent HOME keeps agent logins (claude, codex, aider) across agents.
@@ -86,6 +90,7 @@ cmd_new() {
     --label "orchestra.repo=$repo_name" \
     --label "orchestra.repo_path=$repo_path" \
     --label "orchestra.branch=$branch" \
+    --hostname "$container_hostname" \
     --user "$(id -u):$(id -g)" \
     "${env_args[@]}" \
     -v "$ORCHESTRA_AGENT_HOME:/home/agent" \
