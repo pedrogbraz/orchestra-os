@@ -1,0 +1,33 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: |
+          for f in install/install.sh install/lib/*.sh install/modules/*.sh bin/orchestra; do
+            bash -n "$f"
+          done
+
+      - name: ShellCheck
+        run: shellcheck install/install.sh install/lib/*.sh install/modules/*.sh bin/orchestra
+
+      # Runtime errors like unbound variables under set -u only show up when the code runs.
+      - name: Smoke test error paths
+        run: |
+          if bash bin/orchestra new >/dev/null 2>&1; then
+            echo "expected 'orchestra new' without arguments to fail"; exit 1
+          fi
+          bash bin/orchestra new a "$RUNNER_TEMP" 2>&1 | grep -q "is not a git repository"
+          bash bin/orchestra new a . --bogus 2>&1 | grep -q "unknown option"
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/pacman"
+          chmod +x "$RUNNER_TEMP/bin/pacman"
+          PATH="$RUNNER_TEMP/bin:$PATH" bash install/install.sh --list | grep -qx "60-docker"

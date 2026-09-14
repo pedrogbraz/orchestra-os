@@ -11,7 +11,9 @@ usage() {
 orchestra - run isolated AI coding agents on git worktrees + containers
 
 Usage:
-  orchestra new <agent> <repo-path> [branch]   Create a worktree + sandboxed container for an agent
+  orchestra new <agent> <repo-path> [branch] [--cpus N] [--memory SIZE]
+                                               Create a worktree + sandboxed container for an agent
+                                               (default: half the CPU cores, 4g; 0 means no limit)
   orchestra list                               List running agent containers
   orchestra attach <agent>                     Attach to a running agent's shell
   orchestra stop <agent>                       Stop an agent's container (keeps the worktree)
@@ -20,10 +22,28 @@ EOF
 }
 
 cmd_new() {
-  if [[ $# -lt 2 ]]; then
+  local cores cpus memory
+  cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+  # Default to half the host's cores and 4 GB so one runaway agent can't starve the machine or the other agents.
+  cpus="${ORCHESTRA_CPUS:-$(( cores > 1 ? cores / 2 : 1 ))}"
+  memory="${ORCHESTRA_MEMORY:-4g}"
+
+  local -a positional=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cpus) cpus="${2:?--cpus needs a value}"; shift 2 ;;
+      --cpus=*) cpus="${1#--cpus=}"; shift ;;
+      --memory) memory="${2:?--memory needs a value}"; shift 2 ;;
+      --memory=*) memory="${1#--memory=}"; shift ;;
+      -*) echo "orchestra: unknown option: $1" >&2; exit 1 ;;
+      *) positional+=("$1"); shift ;;
+    esac
+  done
+  if [[ ${#positional[@]} -lt 2 ]]; then
     usage
     exit 1
   fi
+  set -- "${positional[@]}"
   local agent="$1" repo_path="$2"
   local branch="${3:-agent/$agent}"
   local repo_name worktree_path git_common_dir
@@ -90,7 +110,11 @@ cmd_new() {
     --label "orchestra.repo=$repo_name" \
     --label "orchestra.repo_path=$repo_path" \
     --label "orchestra.branch=$branch" \
+    --label "orchestra.cpus=$cpus" \
+    --label "orchestra.memory=$memory" \
     --hostname "$container_hostname" \
+    --cpus "$cpus" \
+    --memory "$memory" \
     --user "$(id -u):$(id -g)" \
     "${env_args[@]}" \
     -v "$ORCHESTRA_AGENT_HOME:/home/agent" \
@@ -113,12 +137,13 @@ cmd_new() {
 
   echo "Agent '$agent' ready."
   echo "Worktree: $worktree_path"
+  echo "Limits: $cpus CPUs, $memory memory"
   echo "Attach with: orchestra attach $agent"
 }
 
 cmd_list() {
   docker ps --filter "label=orchestra.agent" \
-    --format 'table {{.Names}}\t{{.Label "orchestra.agent"}}\t{{.Label "orchestra.repo"}}\t{{.Status}}'
+    --format 'table {{.Names}}\t{{.Label "orchestra.agent"}}\t{{.Label "orchestra.repo"}}\t{{.Label "orchestra.cpus"}}\t{{.Label "orchestra.memory"}}\t{{.Status}}'
 }
 
 cmd_attach() {

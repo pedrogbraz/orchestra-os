@@ -51,6 +51,18 @@ orchestra rm refactor-agent                       # stop and remove worktree + c
 
 Each agent works on its own branch (`agent/<name>` by default). `orchestra rm` never deletes that branch, and creating an agent with the same name later reuses it, so an agent's commits are never lost.
 
+### Resource limits
+
+Each agent gets half your CPU cores and 4 GB of memory by default, so one runaway agent can't freeze the machine or starve the others. Override per agent, or set defaults for every new agent:
+
+```bash
+orchestra new big-build ~/code/my-app --cpus 4 --memory 8g
+export ORCHESTRA_CPUS=2 ORCHESTRA_MEMORY=6g
+orchestra new unlimited ~/code/my-app --cpus 0 --memory 0   # no limits
+```
+
+If an agent goes over its memory limit, the kernel kills the largest process inside that agent's container (usually a build or the agent itself) instead of affecting the rest of the system.
+
 ### Credentials
 
 Agents run as your user and commit with your `git config user.name` / `user.email`. All agents share one persistent home at `~/.orchestra/agent-home`, so logging in once inside any agent (`claude`, `codex`, `aider`) carries over to the next.
